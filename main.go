@@ -18,11 +18,21 @@ import (
 	"io"
 	"os"
 	"regexp"
+	"runtime/debug"
 	"strings"
 	"time"
 )
 
-var version = "dev" // set by goreleaser: -ldflags "-X main.version=…"
+var version = "dev" // release builds: -ldflags "-X main.version=…" (scripts/release-hug.sh)
+
+func init() {
+	// `go install github.com/githug-ai/hug@vX` builds carry the module version instead.
+	if version == "dev" {
+		if bi, ok := debug.ReadBuildInfo(); ok && strings.HasPrefix(bi.Main.Version, "v") {
+			version = strings.TrimPrefix(bi.Main.Version, "v")
+		}
+	}
+}
 
 var (
 	stdout io.Writer = os.Stdout
