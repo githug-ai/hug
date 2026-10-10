@@ -160,27 +160,33 @@ func cmdSetup(args []string) error {
 			return err
 		}
 	}
-	fmt.Fprintf(stderr, "githug set up for %s as %s (%s).\n  git push: fresh 1-hour token per push\n  commit author: %s <%s>\n  trailers hook: %s\n", repoName, t.Agent.ID, t.Author.Name, t.Author.Name, t.Author.Email, hookNote)
+	fmt.Fprintf(stderr, "githug set up for %s as %s (%s).\n  git push: fresh 1-hour token per push\n  commit author: %s <%s>\n  hooks (trailers, push attestation): %s\n", repoName, t.Agent.ID, t.Author.Name, t.Author.Name, t.Author.Email, hookNote)
 	return nil
 }
 
+// installHook installs both hooks: prepare-commit-msg (trailers) and pre-push (attests the
+// pushed commits with the agent's key, which is what makes them "verified" on githug).
 func installHook(self string) (string, error) {
 	dir, err := gitOut("rev-parse", "--git-path", "hooks")
 	if err != nil {
 		return "", err
 	}
-	path := filepath.Join(dir, "prepare-commit-msg")
-	if b, err := os.ReadFile(path); err == nil && !strings.Contains(string(b), hookMarker) {
-		return "", fmt.Errorf("%s already exists; add `%s hook prepare-commit-msg \"$1\" \"$2\"` to it, or run setup with --no-hook", path, self)
-	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
-	script := "#!/bin/sh\n" + hookMarker + "\nexec " + self + " hook prepare-commit-msg \"$@\"\n"
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
-		return "", err
+	var paths []string
+	for _, name := range []string{"prepare-commit-msg", "pre-push"} {
+		path := filepath.Join(dir, name)
+		if b, err := os.ReadFile(path); err == nil && !strings.Contains(string(b), hookMarker) {
+			return "", fmt.Errorf("%s already exists; add `%s hook %s \"$@\"` to it, or run setup with --no-hook", path, self, name)
+		}
+		script := "#!/bin/sh\n" + hookMarker + "\nexec " + self + " hook " + name + " \"$@\"\n"
+		if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+			return "", err
+		}
+		paths = append(paths, path)
 	}
-	return path, nil
+	return strings.Join(paths, ", "), nil
 }
 
 // ---------------------------------------------------------------------------
@@ -229,8 +235,11 @@ func cmdCredential(args []string) error {
 // ---------------------------------------------------------------------------
 
 func cmdHook(args []string) error {
+	if len(args) > 0 && args[0] == "pre-push" {
+		return hookPrePush(args[1:])
+	}
 	if len(args) < 2 || args[0] != "prepare-commit-msg" {
-		return errors.New("usage: hug hook prepare-commit-msg <msg-file> [source]")
+		return errors.New("usage: hug hook prepare-commit-msg <msg-file> [source] | hug hook pre-push <remote> <url>")
 	}
 	if len(args) > 2 && args[2] == "merge" {
 		return nil
@@ -254,6 +263,71 @@ func cmdHook(args []string) error {
 		gitArgs = append(gitArgs, "--trailer", tr)
 	}
 	return gitRun(append(gitArgs, args[1])...)
+}
+
+var zeroSHA = regexp.MustCompile(`^0+$`)
+
+// hookPrePush reads git's "<local ref> <local sha> <remote ref> <remote sha>" lines and
+// reports every commit about to be pushed that the remote doesn't have yet to githug, with
+// the agent's key (POST /v1/commits). Never blocks a push: failures are warnings.
+func hookPrePush(args []string) error {
+	remote := "origin"
+	if len(args) > 0 && args[0] != "" {
+		remote = args[0]
+	}
+	var shas []string
+	seen := map[string]bool{}
+	sc := bufio.NewScanner(os.Stdin)
+	for sc.Scan() {
+		f := strings.Fields(sc.Text())
+		if len(f) != 4 || zeroSHA.MatchString(f[1]) {
+			continue // a delete
+		}
+		revs := []string{"rev-list", "--max-count=500", f[1]}
+		if !zeroSHA.MatchString(f[3]) {
+			revs = append(revs, "^"+f[3])
+		} else {
+			revs = append(revs, "--not", "--remotes="+remote)
+		}
+		out, err := gitOut(revs...)
+		if err != nil {
+			continue
+		}
+		for _, s := range strings.Fields(out) {
+			if !seen[s] && len(shas) < 500 {
+				seen[s] = true
+				shas = append(shas, s)
+			}
+		}
+	}
+	if len(shas) == 0 {
+		return nil
+	}
+	repoName, _ := gitOut("config", "--get", "githug.repo")
+	if repoName == "" {
+		repoName = repoFromRemote()
+	}
+	cfg, err := loadConfig()
+	if err == nil {
+		err = attest(cfg, repoAgent(), repoName, shas)
+	}
+	if err != nil {
+		fmt.Fprintln(stderr, "hug: commits not attested (they'll show as unattested on githug):", err)
+	}
+	return nil
+}
+
+func attest(cfg *Config, agentName, repoName string, shas []string) error {
+	key, err := cfg.agentKey(agentName)
+	if err != nil {
+		return err
+	}
+	body := map[string]any{"repo": repoName, "shas": shas}
+	if run := os.Getenv("GITHUG_RUN"); run != "" {
+		body["run"] = run
+	}
+	_, err = newClient(cfg.baseURL()).do("POST", "/v1/commits", key, body, nil)
+	return err
 }
 
 // ---------------------------------------------------------------------------

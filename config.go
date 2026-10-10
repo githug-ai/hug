@@ -3,8 +3,10 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Config is what `hug` remembers between runs: the account key from device login and
@@ -72,6 +74,19 @@ func (c *Config) save() error {
 		return err
 	}
 	return os.Rename(tmp, p)
+}
+
+// setURL saves a self-hosted githug's address (hug init/login --url).
+func (c *Config) setURL(u string) error {
+	if u == "" {
+		return nil
+	}
+	u = strings.TrimRight(u, "/")
+	if !strings.HasPrefix(u, "https://") && !strings.HasPrefix(u, "http://localhost") && !strings.HasPrefix(u, "http://127.0.0.1") {
+		return fmt.Errorf("--url must be https:// (or http://localhost for testing): %s", u)
+	}
+	c.BaseURL = u
+	return c.save()
 }
 
 // baseURL: GITHUG_URL beats the config, which beats production.

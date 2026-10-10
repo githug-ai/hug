@@ -99,9 +99,11 @@ func run(args []string) error {
 func usage() {
 	fmt.Fprint(stdout, `hug — give your coding agent its own name on GitHub (githug.ai)
 
-  hug init --repo owner/repo [--agent name] [--json]
+  hug init --repo owner/repo [--agent name] [--url https://githug.example.com] [--json]
       Log in (a human approves one code on github.com), make sure githug is installed
-      on the repo, create the agent and save its key. Ready to push.
+      on the repo, create the agent and save its key. Ready to push. --url points hug
+      at a self-hosted githug (saved; GITHUG_URL overrides it). --graph-credit adds
+      Co-authored-by for you, so the agent's commits count on your GitHub graph (off by default).
   hug setup [--agent name]
       In a clone: plain git push works as the agent (fresh token per push), commits
       are authored as the agent, and a hook adds the trailers.
@@ -217,11 +219,15 @@ func deviceLogin(cfg *Config, c *client, o out) error {
 func cmdLogin(args []string) error {
 	fs := flag.NewFlagSet("login", flag.ContinueOnError)
 	asJSON := fs.Bool("json", false, "")
+	urlF := fs.String("url", "", "")
 	if _, err := parse(fs, args); err != nil {
 		return err
 	}
 	cfg, err := loadConfig()
 	if err != nil {
+		return err
+	}
+	if err := cfg.setURL(*urlF); err != nil {
 		return err
 	}
 	return deviceLogin(cfg, newClient(cfg.baseURL()), out{*asJSON})
@@ -249,14 +255,19 @@ func cmdInit(args []string) error {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	repoF := fs.String("repo", "", "")
 	agentF := fs.String("agent", "", "")
+	graphCredit := fs.Bool("graph-credit", false, "")
 	asJSON := fs.Bool("json", false, "")
 	fs.Bool("no-interactive", true, "") // hug never prompts; accepted for agents that pass it
 	wait := fs.Duration("wait", 10*time.Minute, "")
+	urlF := fs.String("url", "", "")
 	if _, err := parse(fs, args); err != nil {
 		return err
 	}
 	o := out{*asJSON}
 	cfg, err := loadConfig()
+	if err == nil {
+		err = cfg.setURL(*urlF)
+	}
 	if err != nil {
 		return err
 	}
@@ -282,7 +293,7 @@ func cmdInit(args []string) error {
 		return err
 	}
 	if _, ok := cfg.Agents[name]; !ok {
-		if err := createAgent(cfg, c, name, *repoF); err != nil {
+		if err := createAgent(cfg, c, name, *repoF, *graphCredit); err != nil {
 			return err
 		}
 	}
@@ -338,12 +349,14 @@ func waitForRepo(cfg *Config, c *client, o out, repoName string, wait time.Durat
 	}
 }
 
-func createAgent(cfg *Config, c *client, name, repoName string) error {
+// createAgent: graphCredit adds Co-authored-by for you to the agent's commits, which GitHub
+// counts on your contribution graph (off by default; Accountable: always names you).
+func createAgent(cfg *Config, c *client, name, repoName string, graphCredit bool) error {
 	var r struct {
 		Agent agent  `json:"agent"`
 		Key   string `json:"key"`
 	}
-	if _, err := c.do("POST", "/v1/agents", cfg.AccountKey, map[string]any{"id": name, "repos": []string{repoName}}, &r); err != nil {
+	if _, err := c.do("POST", "/v1/agents", cfg.AccountKey, map[string]any{"id": name, "repos": []string{repoName}, "credit_human": graphCredit}, &r); err != nil {
 		return err
 	}
 	cfg.Agents[name] = r.Key
@@ -426,6 +439,7 @@ func cmdAgentList(args []string) error {
 func cmdAgentCreate(args []string) error {
 	fs := flag.NewFlagSet("agent create", flag.ContinueOnError)
 	repoF := fs.String("repo", "", "")
+	graphCredit := fs.Bool("graph-credit", false, "")
 	asJSON := fs.Bool("json", false, "")
 	pos, err := parse(fs, args)
 	if err != nil {
@@ -438,7 +452,7 @@ func cmdAgentCreate(args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := createAgent(cfg, c, pos[0], *repoF); err != nil {
+	if err := createAgent(cfg, c, pos[0], *repoF, *graphCredit); err != nil {
 		return err
 	}
 	if cfg.DefaultAgent == "" {
