@@ -317,6 +317,54 @@ func hookPrePush(args []string) error {
 	return nil
 }
 
+// cmdAttest: `hug attest [--repo owner/repo] [rev…]` reports commits to githug with the agent's
+// key, for pushes that don't go through hug's pre-push hook (CI, `hug env`). Run it before the
+// push. Default: the commits on HEAD that no remote-tracking branch has yet.
+func cmdAttest(args []string) error {
+	fs := flag.NewFlagSet("attest", flag.ContinueOnError)
+	repoF := fs.String("repo", "", "")
+	agentF := fs.String("agent", "", "")
+	revs, err := parse(fs, args)
+	if err != nil {
+		return err
+	}
+	repoName := *repoF
+	if repoName == "" {
+		repoName, _ = gitOut("config", "--get", "githug.repo")
+	}
+	if repoName == "" {
+		repoName = repoFromRemote()
+	}
+	if !repoRE.MatchString(repoName) {
+		return errors.New("can't tell the GitHub repo; pass --repo owner/repo")
+	}
+	if len(revs) == 0 {
+		revs = []string{"HEAD", "--not", "--remotes"}
+	}
+	out, err := gitOut(append([]string{"rev-list", "--max-count=500"}, revs...)...)
+	if err != nil {
+		return fmt.Errorf("git rev-list: %w", err)
+	}
+	shas := strings.Fields(out)
+	if len(shas) == 0 {
+		fmt.Fprintln(stderr, "hug: nothing to attest (no commits missing from the remote)")
+		return nil
+	}
+	cfg, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	agent := *agentF
+	if agent == "" {
+		agent = repoAgent()
+	}
+	if err := attest(cfg, agent, repoName, shas); err != nil {
+		return err
+	}
+	fmt.Fprintf(stderr, "hug: attested %d commit(s) on %s\n", len(shas), repoName)
+	return nil
+}
+
 func attest(cfg *Config, agentName, repoName string, shas []string) error {
 	key, err := cfg.agentKey(agentName)
 	if err != nil {

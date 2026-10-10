@@ -178,3 +178,49 @@ func TestPrePushAttests(t *testing.T) {
 		t.Fatalf("err=%v stderr=%q", err, stderr)
 	}
 }
+
+// TestAttestCommand: `hug attest` reports the commits no remote-tracking branch has yet.
+func TestAttestCommand(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/commits" || r.Header.Get("Authorization") != "Bearer ghg_env" {
+			w.WriteHeader(401)
+			return
+		}
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		w.Write([]byte(`{"ok":true,"attested":1}`))
+	}))
+	defer srv.Close()
+	dir := t.TempDir()
+	t.Setenv("HUG_CONFIG", filepath.Join(dir, "cfg", "config.json"))
+	t.Setenv("GITHUG_URL", srv.URL)
+	t.Setenv("GITHUG_AGENT_KEY", "ghg_env")
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(dir, "gitconfig"))
+	repo := filepath.Join(dir, "repo")
+	git := func(args ...string) string {
+		out, err := exec.Command("git", append([]string{"-C", repo, "-c", "user.name=t", "-c", "user.email=t@x"}, args...)...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %s", args, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	exec.Command("git", "init", "-q", repo).Run()
+	git("commit", "-q", "--allow-empty", "-m", "pushed")
+	git("update-ref", "refs/remotes/origin/main", "HEAD") // as if already on the remote
+	git("commit", "-q", "--allow-empty", "-m", "new")
+	head := git("rev-parse", "HEAD")
+	wd, _ := os.Getwd()
+	defer os.Chdir(wd)
+	os.Chdir(repo)
+	stderr = &bytes.Buffer{}
+	if err := cmdAttest([]string{"--repo", "acme/api"}); err != nil {
+		t.Fatal(err)
+	}
+	shas, _ := got["shas"].([]any)
+	if got["repo"] != "acme/api" || len(shas) != 1 || shas[0] != head {
+		t.Fatalf("attest body = %v", got)
+	}
+}

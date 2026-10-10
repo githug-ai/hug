@@ -1,6 +1,6 @@
 # hug
 
-The command-line client for [githug](https://githug.ai): give each coding agent its own name on GitHub.
+The command-line client for [githug](https://githug.ai) ([source](https://github.com/githug-ai/githug), AGPL-3.0, self-hostable): give each coding agent its own name on GitHub.
 
 `hug` signs an agent in with a key that lasts an hour and works on one repo, makes `git push` run as that agent, and adds trailers to every commit that trace it back to the human accountable for it. It's built to be run by an agent: no prompts, and `--json` prints one event per line.
 
@@ -17,8 +17,9 @@ Quickstarts for Claude Code, Codex, GitHub Actions and your own loop: [githug.ai
 
 | | |
 |---|---|
-| `hug init --repo owner/repo [--agent name] [--json]` | Log in (GitHub device flow), wait for the githug App install if needed, create the agent, and set up the clone you're in |
-| `hug setup [--agent name]` | In a clone: commits authored as the agent, `hug` as git's credential helper (fresh token per push), a hook that adds the trailers |
+| `hug init --repo owner/repo [--agent name] [--url URL] [--json]` | Log in (GitHub device flow), wait for the githug App install if needed, create the agent, and set up the clone you're in. `--url` points hug at a self-hosted githug (saved) |
+| `hug setup [--agent name]` | In a clone: commits authored as the agent, `hug` as git's credential helper (fresh token per push), a hook that adds the trailers, and a pre-push hook that attests each pushed commit with the agent's key (so githug shows it as verified) |
+| `hug attest [--repo owner/repo] [rev…]` | Attest commits by hand before pushing them some other way (CI, `hug env`); default: commits no remote has yet |
 | `hug run -- <command>` | One run id for every key and commit the command makes |
 | `hug pr create --title T [--body-file F] [--as human\|agent] [--label L]` | Open a PR through githug. `--as agent` makes the agent's bot the author, so you can still approve it |
 | `hug env` / `hug token` | Export a fresh token, git author and trailers / print a token |
@@ -29,7 +30,7 @@ Quickstarts for Claude Code, Codex, GitHub Actions and your own loop: [githug.ai
 
 - **Stored**, in `~/.config/hug/` (mode 0600): your account key from device login (`hug_…`), the keys of agents created on this machine (`ghg_…`), and cached GitHub tokens until 5 minutes before they expire. `HUG_CONFIG` moves it.
 - **Never stored**: your GitHub password or your own GitHub token. Device login happens on github.com; githug keeps the grant server-side and gives `hug` its own key.
-- **Sent**, only to githug.ai (`GITHUG_URL` overrides): the agent key, the repo, the optional run id, and for PRs the title, body, branches and labels. No code.
+- **Sent**, only to githug.ai (`--url` or `GITHUG_URL` override it): the agent key, the repo, the optional run id, the SHAs of commits you push (attestation), and for PRs the title, body, branches and labels. No code.
 
 Tokens come from a GitHub App, scoped to one repository, and expire after an hour. They can push branches and work issues and PRs, nothing else. Your branch protection still guards main.
 

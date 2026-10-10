@@ -80,6 +80,8 @@ func run(args []string) error {
 		return cmdHook(rest)
 	case "run":
 		return cmdRun(rest)
+	case "attest":
+		return cmdAttest(rest)
 	case "pr":
 		return cmdPR(rest)
 	case "token":
@@ -112,6 +114,9 @@ func usage() {
   hug pr create --title T [--body B | --body-file F] [--base main] [--label L] [--draft]
       Open a PR with you as author and the agent in the footer, with a verify link.
       --as agent: the agent's bot is the author, so you can still approve it.
+  hug attest [--repo owner/repo] [rev…]
+      Report commits to githug with the agent's key before pushing them some other way
+      (CI, hug env), so they show as verified. hug setup's pre-push hook does it for you.
   hug env [--repo owner/repo] [--run id]
       Print exports for a fresh 1-hour token: eval "$(hug env)"
   hug token [--repo owner/repo] [--run id] [--json]
